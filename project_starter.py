@@ -8,12 +8,21 @@ from sqlalchemy.sql import text
 from datetime import datetime, timedelta
 from typing import Dict, List, Union
 from sqlalchemy import create_engine, Engine
+from dataclasses import dataclass, field, asdict
+
+from smolagents import (
+    ToolCallingAgent,
+    OpenAIServerModel,
+    tool,
+)
+
+import dotenv
 
 # Create an SQLite database
 db_engine = create_engine("sqlite:///munder_difflin.db")
 
 # List containing the different kinds of papers 
-paper_supplies = [
+PAPER_SUPPLIES = [
     # Paper Types (priced per sheet unless specified)
     {"item_name": "A4 paper",                         "category": "paper",        "unit_price": 0.05},
     {"item_name": "Letter-sized paper",              "category": "paper",        "unit_price": 0.06},
@@ -71,11 +80,11 @@ paper_supplies = [
 
 # Given below are some utility functions you can use to implement your multi-agent system
 
-def generate_sample_inventory(paper_supplies: list, coverage: float = 0.4, seed: int = 137) -> pd.DataFrame:
+def generate_sample_inventory(PAPER_SUPPLIES: list, coverage: float = 0.5, seed: int = 137) -> pd.DataFrame:
     """
     Generate inventory for exactly a specified percentage of items from the full paper supply list.
 
-    This function randomly selects exactly `coverage` × N items from the `paper_supplies` list,
+    This function randomly selects exactly `coverage` × N items from the `PAPER_SUPPLIES` list,
     and assigns each selected item:
     - a random stock quantity between 200 and 800,
     - a minimum stock level between 50 and 150.
@@ -83,7 +92,7 @@ def generate_sample_inventory(paper_supplies: list, coverage: float = 0.4, seed:
     The random seed ensures reproducibility of selection and stock levels.
 
     Args:
-        paper_supplies (list): A list of dictionaries, each representing a paper item with
+        PAPER_SUPPLIES (list): A list of dictionaries, each representing a paper item with
                                keys 'item_name', 'category', and 'unit_price'.
         coverage (float, optional): Fraction of items to include in the inventory (default is 0.4, or 40%).
         seed (int, optional): Random seed for reproducibility (default is 137).
@@ -100,17 +109,17 @@ def generate_sample_inventory(paper_supplies: list, coverage: float = 0.4, seed:
     np.random.seed(seed)
 
     # Calculate number of items to include based on coverage
-    num_items = int(len(paper_supplies) * coverage)
+    num_items = int(len(PAPER_SUPPLIES) * coverage)
 
     # Randomly select item indices without replacement
     selected_indices = np.random.choice(
-        range(len(paper_supplies)),
+        range(len(PAPER_SUPPLIES)),
         size=num_items,
         replace=False
     )
 
-    # Extract selected items from paper_supplies list
-    selected_items = [paper_supplies[i] for i in selected_indices]
+    # Extract selected items from PAPER_SUPPLIES list
+    selected_items = [PAPER_SUPPLIES[i] for i in selected_indices]
 
     # Construct inventory records
     inventory = []
@@ -122,7 +131,6 @@ def generate_sample_inventory(paper_supplies: list, coverage: float = 0.4, seed:
             "current_stock": np.random.randint(200, 800),  # Realistic stock range
             "min_stock_level": np.random.randint(50, 150)  # Reasonable threshold for reordering
         })
-
     # Return inventory as a pandas DataFrame
     return pd.DataFrame(inventory)
 
@@ -168,14 +176,14 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
         # ----------------------------
         # 2. Load and initialize 'quote_requests' table
         # ----------------------------
-        quote_requests_df = pd.read_csv("quote_requests.csv")
+        quote_requests_df = pd.read_csv("/workspace/agentic-ai-c4-exercises-demos/project/Inventory-management-and-quoting-system/quote_requests.csv")
         quote_requests_df["id"] = range(1, len(quote_requests_df) + 1)
         quote_requests_df.to_sql("quote_requests", db_engine, if_exists="replace", index=False)
 
         # ----------------------------
         # 3. Load and transform 'quotes' table
         # ----------------------------
-        quotes_df = pd.read_csv("quotes.csv")
+        quotes_df = pd.read_csv("/workspace/agentic-ai-c4-exercises-demos/project/Inventory-management-and-quoting-system/quotes.csv")
         quotes_df["request_id"] = range(1, len(quotes_df) + 1)
         quotes_df["order_date"] = initial_date
 
@@ -203,7 +211,7 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
         # ----------------------------
         # 4. Generate inventory and seed stock
         # ----------------------------
-        inventory_df = generate_sample_inventory(paper_supplies, seed=seed)
+        inventory_df = generate_sample_inventory(PAPER_SUPPLIES, seed=seed)
 
         # Seed initial transactions
         initial_transactions = []
@@ -238,179 +246,6 @@ def init_database(db_engine: Engine, seed: int = 137) -> Engine:
     except Exception as e:
         print(f"Error initializing database: {e}")
         raise
-
-def create_transaction(
-    item_name: str,
-    transaction_type: str,
-    quantity: int,
-    price: float,
-    date: Union[str, datetime],
-) -> int:
-    """
-    This function records a transaction of type 'stock_orders' or 'sales' with a specified
-    item name, quantity, total price, and transaction date into the 'transactions' table of the database.
-
-    Args:
-        item_name (str): The name of the item involved in the transaction.
-        transaction_type (str): Either 'stock_orders' or 'sales'.
-        quantity (int): Number of units involved in the transaction.
-        price (float): Total price of the transaction.
-        date (str or datetime): Date of the transaction in ISO 8601 format.
-
-    Returns:
-        int: The ID of the newly inserted transaction.
-
-    Raises:
-        ValueError: If `transaction_type` is not 'stock_orders' or 'sales'.
-        Exception: For other database or execution errors.
-    """
-    try:
-        # Convert datetime to ISO string if necessary
-        date_str = date.isoformat() if isinstance(date, datetime) else date
-
-        # Validate transaction type
-        if transaction_type not in {"stock_orders", "sales"}:
-            raise ValueError("Transaction type must be 'stock_orders' or 'sales'")
-
-        # Prepare transaction record as a single-row DataFrame
-        transaction = pd.DataFrame([{
-            "item_name": item_name,
-            "transaction_type": transaction_type,
-            "units": quantity,
-            "price": price,
-            "transaction_date": date_str,
-        }])
-
-        # Insert the record into the database
-        transaction.to_sql("transactions", db_engine, if_exists="append", index=False)
-
-        # Fetch and return the ID of the inserted row
-        result = pd.read_sql("SELECT last_insert_rowid() as id", db_engine)
-        return int(result.iloc[0]["id"])
-
-    except Exception as e:
-        print(f"Error creating transaction: {e}")
-        raise
-
-def get_all_inventory(as_of_date: str) -> Dict[str, int]:
-    """
-    Retrieve a snapshot of available inventory as of a specific date.
-
-    This function calculates the net quantity of each item by summing 
-    all stock orders and subtracting all sales up to and including the given date.
-
-    Only items with positive stock are included in the result.
-
-    Args:
-        as_of_date (str): ISO-formatted date string (YYYY-MM-DD) representing the inventory cutoff.
-
-    Returns:
-        Dict[str, int]: A dictionary mapping item names to their current stock levels.
-    """
-    # SQL query to compute stock levels per item as of the given date
-    query = """
-        SELECT
-            item_name,
-            SUM(CASE
-                WHEN transaction_type = 'stock_orders' THEN units
-                WHEN transaction_type = 'sales' THEN -units
-                ELSE 0
-            END) as stock
-        FROM transactions
-        WHERE item_name IS NOT NULL
-        AND transaction_date <= :as_of_date
-        GROUP BY item_name
-        HAVING stock > 0
-    """
-
-    # Execute the query with the date parameter
-    result = pd.read_sql(query, db_engine, params={"as_of_date": as_of_date})
-
-    # Convert the result into a dictionary {item_name: stock}
-    return dict(zip(result["item_name"], result["stock"]))
-
-def get_stock_level(item_name: str, as_of_date: Union[str, datetime]) -> pd.DataFrame:
-    """
-    Retrieve the stock level of a specific item as of a given date.
-
-    This function calculates the net stock by summing all 'stock_orders' and 
-    subtracting all 'sales' transactions for the specified item up to the given date.
-
-    Args:
-        item_name (str): The name of the item to look up.
-        as_of_date (str or datetime): The cutoff date (inclusive) for calculating stock.
-
-    Returns:
-        pd.DataFrame: A single-row DataFrame with columns 'item_name' and 'current_stock'.
-    """
-    # Convert date to ISO string format if it's a datetime object
-    if isinstance(as_of_date, datetime):
-        as_of_date = as_of_date.isoformat()
-
-    # SQL query to compute net stock level for the item
-    stock_query = """
-        SELECT
-            item_name,
-            COALESCE(SUM(CASE
-                WHEN transaction_type = 'stock_orders' THEN units
-                WHEN transaction_type = 'sales' THEN -units
-                ELSE 0
-            END), 0) AS current_stock
-        FROM transactions
-        WHERE item_name = :item_name
-        AND transaction_date <= :as_of_date
-    """
-
-    # Execute query and return result as a DataFrame
-    return pd.read_sql(
-        stock_query,
-        db_engine,
-        params={"item_name": item_name, "as_of_date": as_of_date},
-    )
-
-def get_supplier_delivery_date(input_date_str: str, quantity: int) -> str:
-    """
-    Estimate the supplier delivery date based on the requested order quantity and a starting date.
-
-    Delivery lead time increases with order size:
-        - ≤10 units: same day
-        - 11–100 units: 1 day
-        - 101–1000 units: 4 days
-        - >1000 units: 7 days
-
-    Args:
-        input_date_str (str): The starting date in ISO format (YYYY-MM-DD).
-        quantity (int): The number of units in the order.
-
-    Returns:
-        str: Estimated delivery date in ISO format (YYYY-MM-DD).
-    """
-    # Debug log (comment out in production if needed)
-    print(f"FUNC (get_supplier_delivery_date): Calculating for qty {quantity} from date string '{input_date_str}'")
-
-    # Attempt to parse the input date
-    try:
-        input_date_dt = datetime.fromisoformat(input_date_str.split("T")[0])
-    except (ValueError, TypeError):
-        # Fallback to current date on format error
-        print(f"WARN (get_supplier_delivery_date): Invalid date format '{input_date_str}', using today as base.")
-        input_date_dt = datetime.now()
-
-    # Determine delivery delay based on quantity
-    if quantity <= 10:
-        days = 0
-    elif quantity <= 100:
-        days = 1
-    elif quantity <= 1000:
-        days = 4
-    else:
-        days = 7
-
-    # Add delivery days to the starting date
-    delivery_date_dt = input_date_dt + timedelta(days=days)
-
-    # Return formatted delivery date
-    return delivery_date_dt.strftime("%Y-%m-%d")
 
 def get_cash_balance(as_of_date: Union[str, datetime]) -> float:
     """
@@ -521,6 +356,151 @@ def generate_financial_report(as_of_date: Union[str, datetime]) -> Dict:
     }
 
 
+########################
+########################
+########################
+# YOUR MULTI AGENT STARTS HERE
+########################
+########################
+########################
+
+
+# Set up and load your env parameters and instantiate your model.
+
+
+"""Set up tools for your agents to use, these should be methods that combine the database functions above
+ and apply criteria to them to ensure that the flow of the system is correct."""
+
+
+dotenv.load_dotenv(dotenv_path="/workspace/agentic-ai-c4-exercises-demos/project/Inventory-management-and-quoting-system/.env")
+openai_api_key = os.getenv("OPENAI_API_KEY")
+model = OpenAIServerModel(
+    model_id="gpt-4o-mini",
+    api_base="https://openai.vocareum.com/v1",
+    api_key=openai_api_key,
+)
+
+# @dataclass
+# class ItemInventory:
+#     item_name: str 
+#     category: str
+#     unit_price: float = 0.0
+#     current_stock: int = 0
+#     min_stock_level: int = 0
+
+# @dataclass
+# class Inventory:
+#     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+#     total_inventory: List[ItemInventory] = field(default_factory=list)
+
+# @dataclass
+# class QuoteMetaData:
+#     job_type: str
+#     order_size: str 
+#     event_type: str
+
+# @dataclass
+# class Quotation:
+#     total_amount: float = 0.0
+#     quote_explanation: str
+#     request_metadata: QuoteMetaData
+
+# Tools for inventory agent
+
+@tool
+def get_all_inventory(as_of_date: str) -> Dict[str, int]:
+    """
+    Retrieve a snapshot of available inventory as of a specific date.
+
+    This function calculates the net quantity of each item by summing 
+    all stock orders and subtracting all sales up to and including the given date.
+
+    Only items with positive stock are included in the result.
+
+    Args:
+        as_of_date (str): ISO-formatted date string (YYYY-MM-DD) representing the inventory cutoff.
+
+    Returns:
+        Dict[str, int]: A dictionary mapping item names to their current stock levels.
+    """
+    # SQL query to compute stock levels per item as of the given date
+    query = """
+        SELECT
+            item_name,
+            SUM(CASE
+                WHEN transaction_type = 'stock_orders' THEN units
+                WHEN transaction_type = 'sales' THEN -units
+                ELSE 0
+            END) as stock
+        FROM transactions
+        WHERE item_name IS NOT NULL
+        AND transaction_date <= :as_of_date
+        GROUP BY item_name
+        HAVING stock > 0
+    """
+
+    # Execute the query with the date parameter
+    result = pd.read_sql(query, db_engine, params={"as_of_date": as_of_date})
+
+    # Convert the result into a dictionary {item_name: stock}
+    return dict(zip(result["item_name"], result["stock"]))
+
+@tool
+def create_transaction(
+    item_name: str,
+    transaction_type: str,
+    quantity: int,
+    price: float,
+    date: Union[str, datetime],
+) -> int:
+    """
+    This function records a transaction of type 'stock_orders' or 'sales' with a specified
+    item name, quantity, total price, and transaction date into the 'transactions' table of the database.
+
+    Args:
+        item_name (str): The name of the item involved in the transaction.
+        transaction_type (str): Either 'stock_orders' or 'sales'.
+        quantity (int): Number of units involved in the transaction.
+        price (float): Total price of the transaction.
+        date (str or datetime): Date of the transaction in ISO 8601 format.
+
+    Returns:
+        int: The ID of the newly inserted transaction.
+
+    Raises:
+        ValueError: If `transaction_type` is not 'stock_orders' or 'sales'.
+        Exception: For other database or execution errors.
+    """
+    try:
+        # Convert datetime to ISO string if necessary
+        date_str = date.isoformat() if isinstance(date, datetime) else date
+
+        # Validate transaction type
+        if transaction_type not in {"stock_orders", "sales"}:
+            raise ValueError("Transaction type must be 'stock_orders' or 'sales'")
+
+        # Prepare transaction record as a single-row DataFrame
+        transaction = pd.DataFrame([{
+            "item_name": item_name,
+            "transaction_type": transaction_type,
+            "units": quantity,
+            "price": price,
+            "transaction_date": date_str,
+        }])
+
+        # Insert the record into the database
+        transaction.to_sql("transactions", db_engine, if_exists="append", index=False)
+
+        # Fetch and return the ID of the inserted row
+        result = pd.read_sql("SELECT last_insert_rowid() as id", db_engine)
+        return int(result.iloc[0]["id"])
+
+    except Exception as e:
+        print(f"Error creating transaction: {e}")
+        raise
+
+# Tools for quoting agent
+@tool
 def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
     """
     Retrieve a list of historical quotes that match any of the provided search terms.
@@ -580,42 +560,258 @@ def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
         result = conn.execute(text(query), params)
         return [dict(row._mapping) for row in result]
 
-########################
-########################
-########################
-# YOUR MULTI AGENT STARTS HERE
-########################
-########################
-########################
-
-
-# Set up and load your env parameters and instantiate your model.
-
-
-"""Set up tools for your agents to use, these should be methods that combine the database functions above
- and apply criteria to them to ensure that the flow of the system is correct."""
-
-
-# Tools for inventory agent
-
-
-# Tools for quoting agent
-
-
 # Tools for ordering agent
+@tool
+def get_stock_level(item_name: str, as_of_date: Union[str, datetime]) -> pd.DataFrame:
+    """
+    Retrieve the stock level of a specific item as of a given date.
 
+    This function calculates the net stock by summing all 'stock_orders' and 
+    subtracting all 'sales' transactions for the specified item up to the given date.
+    If the item name is not available in inventory. Find a similar item and report the new name.
+
+    Args:
+        item_name (str): The name of the item to look up.
+        as_of_date (str or datetime): The cutoff date (inclusive) for calculating stock.
+
+    Returns:
+        pd.DataFrame: A single-row DataFrame with columns 'item_name' and 'current_stock'.
+    """
+    # Convert date to ISO string format if it's a datetime object
+    if isinstance(as_of_date, datetime):
+        as_of_date = as_of_date.isoformat()
+
+    # SQL query to compute net stock level for the item
+    stock_query = """
+        SELECT
+            item_name,
+            COALESCE(SUM(CASE
+                WHEN transaction_type = 'stock_orders' THEN units
+                WHEN transaction_type = 'sales' THEN -units
+                ELSE 0
+            END), 0) AS current_stock
+        FROM transactions
+        WHERE item_name = :item_name
+        AND transaction_date <= :as_of_date
+    """
+
+    # Execute query and return result as a DataFrame
+    return pd.read_sql(
+        stock_query,
+        db_engine,
+        params={"item_name": item_name, "as_of_date": as_of_date},
+    )
+
+@tool
+def get_supplier_delivery_date(input_date_str: str, quantity: int) -> str:
+    """
+    Estimate the supplier delivery date based on the requested order quantity and a starting date.
+
+    Delivery lead time increases with order size:
+        - ≤10 units: same day
+        - 11–100 units: 1 day
+        - 101–1000 units: 4 days
+        - >1000 units: 7 days
+
+    Args:
+        input_date_str (str): The starting date in ISO format (YYYY-MM-DD).
+        quantity (int): The number of units in the order.
+
+    Returns:
+        str: Estimated delivery date in ISO format (YYYY-MM-DD).
+    """
+    # Debug log (comment out in production if needed)
+    print(f"FUNC (get_supplier_delivery_date): Calculating for qty {quantity} from date string '{input_date_str}'")
+
+    # Attempt to parse the input date
+    try:
+        input_date_dt = datetime.fromisoformat(input_date_str.split("T")[0])
+    except (ValueError, TypeError):
+        # Fallback to current date on format error
+        print(f"WARN (get_supplier_delivery_date): Invalid date format '{input_date_str}', using today as base.")
+        input_date_dt = datetime.now()
+
+    # Determine delivery delay based on quantity
+    if quantity <= 10:
+        days = 0
+    elif quantity <= 100:
+        days = 1
+    elif quantity <= 1000:
+        days = 4
+    else:
+        days = 7
+
+    # Add delivery days to the starting date
+    delivery_date_dt = input_date_dt + timedelta(days=days)
+
+    # Return formatted delivery date
+    return delivery_date_dt.strftime("%Y-%m-%d")
 
 # Set up your agents and create an orchestration agent that will manage them.
 
+# ======= Agents =======
+
+class InventoryManagerAgent(ToolCallingAgent):
+    """Agent responsible for managing inventory. It also places an order when the inventory of an item is 0."""
+    
+    def __init__(self, model):
+        super().__init__(
+            tools=[get_all_inventory, create_transaction],
+            model=model,
+            name="Inventory_Manager",
+            description="Agent responsible for managing inventory. It also places an order when the inventory of an item is below minimum level."
+        )
+
+class QuotationManagerAgent(ToolCallingAgent):
+    """Agent responsible for generating quotations for customer based on historical data."""
+    
+    def __init__(self, model):
+        super().__init__(
+            tools=[search_quote_history],
+            model=model,
+            name="quotation_manager",
+            description="Agent responsible for generating quotations for customer based on historical data."
+        )
+
+class SalesClosureAgent(ToolCallingAgent):
+    """Agent responsible for finalizing the sales to a customer by giving delivery timelines and placing customer order. 
+        This agent will also update the inventory and database for each transaction."""
+    
+    def __init__(self, model):
+        super().__init__(
+            tools=[get_stock_level, get_supplier_delivery_date, create_transaction],
+            model=model,
+            name="sales_order_closure_manager",
+            description="Agent responsible for finalizing the sales to a customer by giving delivery timelines and placing customer order with transaction type 'sales'. This agent will also update the inventory and database for each transaction."
+        )
+
+# ======= Orchestrator =======
+
+class Orchestrator(ToolCallingAgent):
+    """Orchestrator that coordinates the multi-agent pasta factory system."""
+    
+    def __init__(self, model):
+        self.model = model
+        
+        # Initialize specialized agents
+        self.inventory_manager = InventoryManagerAgent(model)
+        self.quotation_manager = QuotationManagerAgent(model)
+        self.sales_order_closure_manager = SalesClosureAgent(model)
+
+        @tool
+        def get_inventory_status(as_of_date: Union[str, datetime]) -> str:
+            """Get current inventory information.
+            
+            Args:
+                as_of_date (str or datetime): Date at which inventory needs to be checked.            
+                
+            Returns:
+                Processed current inventory with the date.
+            """
+            return self.inventory_manager.run(f"""
+            Before processing a customer order, it is necessary to the status of inventory.
+            
+            First, identify the current status of inventory for all the items on the date {as_of_date}.
+            
+            Then, check the stock of all the items. If the current_stock for an item is less than the its own min_stock_level, the place an order to refill this item to maintain a its minumum stock for that item. 
+            Otherwise, do not place an order for stock refills.
+            If the requested stock name is not identical to the name in inventory, use the similar product and output the closest item in the inventory.
+            """)
+
+        @tool
+        def get_qutotation(query: str) -> str:
+            """
+            Get quotation for the current requested customer request.
+
+            Args:
+                query: Requested order by the customer.
+
+            Returns:
+                str: Generated quotation for the order to be sent to the customer.
+            """
+            return self.quotation_manager.run(f"""
+                Generate a quotation for the requested order by the customer on the basis of the historical data of similar orders (doesn't need to be identical orders).
+                The requested order by the customer is: {query}.
+                If there is no similar historical data, use the same format as historical data and create a new quotation.
+            """)
+
+        @tool
+        def finalize_order(query: str)-> str:
+            """
+            Finalize the order by checking the current inventory levels and estimating the delivery times.
+            
+            Args:
+                inventory_status (Dict[str, int]): Current inventory level.
+                query (str): Requested order by the customer            
+                
+            Returns:
+                Generated a confirmation for the order to be sent to the customer.
+            """
+            return self.sales_order_closure_manager.run(f"""
+                Finalize the order. In order to finalize an order, do the following:
+                1. Check the inventory status for each item name or similar item from the request. Compare it against the customer request: {query}.
+                2. Estimate delivery timelines for this order by looking at the estimated delivery date by supplier.
+                3. Create a transaction for this order.
+            """
+            )
+
+        @tool
+        def generate_financial_report(as_of_date: Union[str, datetime])-> str:
+            """ Generate the financial report of the company at the requested date.
+            Args:
+                as_of_date (str or datetime): The cutoff date (inclusive) for calculating financial report.
+            
+            Returns:
+                Financial report of the company at the specified date.
+            
+            """
+
+            return generate_financial_report(as_of_date)
+
+        super().__init__(
+            tools=[get_inventory_status, get_qutotation, finalize_order, generate_financial_report],
+            model=model,
+            name="orchestrator",
+            description="""
+            You are the orchestrator for a inventory and supply chain management of Munder Diffin company.
+            You coordinate between the  inventory manager, sales order closer manager, quotation manager.
+            
+            For customer orders, follow this workflow:
+            1. Use process_order to understand what the customer wants. Map the requested items to the items from inventory items: {PAPER_SUPPLIES}.
+            2. Check the current inventory status. Place an stock order if inventory is below minimum stock.
+            3. Place a sales order if the delivery is possible before or on the requested date. If not, give justifications why timely delivery is not possible.
+            4. Generate a quotation for the user based on the historical data for similar orders and sales order status. Use the same format of quotation as the format in the historical data.
+            """,
+        )
+
+    def process_order(self, customer_request: str) -> str:
+        """
+        Process a customer order from initial request through placing an customer order.
+        
+        Args:
+            customer_request: Natural language order request from customer
+            
+        Returns:
+            Response to customer with order details and delivery timeline status
+        """
+        
+        context = f"""
+        For a customer requst: {customer_request}:
+        1. Check the current inventory status.        
+        2. Finalize and place the order by checking the current stock for the requested items and estimating the delivery timelines from the supplier.
+        3. Prepare a quotation to be sent to the customer. Include the delivery timelines in the quotation.
+        """
+        
+        return self.run(context)
 
 # Run your test scenarios by writing them here. Make sure to keep track of them.
 
 def run_test_scenarios():
     
     print("Initializing Database...")
-    init_database()
+    init_database(db_engine)
     try:
-        quote_requests_sample = pd.read_csv("quote_requests_sample.csv")
+        quote_requests_sample = pd.read_csv("/workspace/agentic-ai-c4-exercises-demos/project/Inventory-management-and-quoting-system/quote_requests_sample.csv")
         quote_requests_sample["request_date"] = pd.to_datetime(
             quote_requests_sample["request_date"], format="%m/%d/%y", errors="coerce"
         )
@@ -635,6 +831,7 @@ def run_test_scenarios():
     ############
     ############
     # INITIALIZE YOUR MULTI AGENT SYSTEM HERE
+    orchestrator = Orchestrator(model)
     ############
     ############
     ############
@@ -660,7 +857,8 @@ def run_test_scenarios():
         ############
         ############
 
-        # response = call_your_multi_agent_system(request_with_date)
+        # response = call_your_multi_agent_system(request_with_date)        
+        response = orchestrator.process_order(request_with_date)
 
         # Update state
         report = generate_financial_report(request_date)
