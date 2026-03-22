@@ -781,6 +781,8 @@ class Orchestrator(ToolCallingAgent):
             2. Check the current inventory status. Place an stock order if inventory is below minimum stock.
             3. Place a sales order if the delivery is possible before or on the requested date. If not, give justifications why timely delivery is not possible.
             4. Generate a quotation for the user based on the historical data for similar orders and sales order status. Use the same format of quotation as the format in the historical data.
+            
+
             """,
         )
 
@@ -800,6 +802,12 @@ class Orchestrator(ToolCallingAgent):
         1. Check the current inventory status.        
         2. Finalize and place the order by checking the current stock for the requested items and estimating the delivery timelines from the supplier.
         3. Prepare a quotation to be sent to the customer. Include the delivery timelines in the quotation.
+        Ensure these important points:
+        Cash guardrail: Before any stock_orders transaction, check if available cash is sufficient. If not, skip or reduce the order and log a warning.
+        Enforce catalog prices: When generating quotations, always use the unit_price from PAPER_SUPPLIES for each item, not hallucinated or historical prices.
+        Delivery dates: Ensure all delivery dates in responses are taken directly from get_supplier_delivery_date tool output for the current request date. Do not allow the LLM to invent or hallucinate dates.
+        No placeholders or bracketed templates: Forbid $XX.XX, [Your Name], etc., in customer-facing responses. Add a post-processing step to check and clean these.
+        Customer envelope: Optionally, move internal details (like transaction IDs) to a footnote or omit them from the main customer message.
         """
         
         return self.run(context)
@@ -817,6 +825,7 @@ def run_test_scenarios():
         )
         quote_requests_sample.dropna(subset=["request_date"], inplace=True)
         quote_requests_sample = quote_requests_sample.sort_values("request_date")
+        quote_requests_sample = quote_requests_sample.reset_index(drop=True)
     except Exception as e:
         print(f"FATAL: Error loading test data: {e}")
         return
