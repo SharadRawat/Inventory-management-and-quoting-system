@@ -44,22 +44,23 @@ The system follows a **hierarchical orchestrator pattern** using the `smolagents
 
 ## Evaluation Results
 
-The system was evaluated using the `run_test_scenarios()` function, which processed 6 customer requests from `quote_requests_sample.csv`. After each order, the system's cash balance and inventory value were recorded and saved to `test_results.csv`. The following summarizes the observed strengths and weaknesses based on the new results:
+The system was evaluated using the `run_test_scenarios()` function, which processed 20 customer requests from `quote_requests_sample.csv`. After each order, the system's cash balance and inventory value were recorded and saved to `test_results.csv`. The following summarizes the observed strengths and weaknesses based on the new results:
 
 ### Strengths
 
-1. **Consistent and clear communication:** Every customer request received a structured, readable response. The system reliably informed customers when items were out of stock and provided quotations even when orders could not be fulfilled.
-2. **Itemized, professional quotations:** Quotations were broken down by item, with quantities and prices clearly listed (e.g., Request 4). This matches real-world business standards.
-3. **Partial fulfillment transparency:** When only some items could be fulfilled (e.g., Request 6), the system clearly indicated which items were available and which were not.
-4. **No negative cash or inventory:** The cash balance and inventory value remained stable, showing that the system did not process invalid transactions or allow negative balances.
+1. **Consistent customer communication:** Every request received a clear, structured response. The system reliably informed customers when items were out of stock and provided quotations or next steps.
+2. **Itemized, professional quotations:** Many responses included detailed, itemized quotations with per-item pricing and totals (e.g., Requests 3, 4, 8, 10, 12, 13, 14, 16, 18, 20), matching real-world business standards.
+3. **Partial fulfillment and alternatives:** When only some items could be fulfilled, the system indicated which items were available and which were not, or suggested alternatives (e.g., Requests 3, 4, 8, 10, 11, 12, 13, 14, 16, 18, 20).
+4. **Financial tracking and movement:** The cash balance and inventory value changed across requests, reflecting attempted order processing and quotation activity.
+5. **Delivery date and follow-up:** Many responses included estimated delivery dates and encouraged customers to confirm or revise their orders (e.g., Requests 4, 8, 12, 13, 14, 16, 18, 20).
 
 ### Weaknesses
 
-1. **No successful full order fulfillment:** All requests resulted in either full stock-outs or only partial fulfillment. There were no cases of a complete customer order being processed and delivered.
-2. **No financial movement:** Cash balance and inventory value did not change across requests, indicating that no actual sales or stock orders were processed, even when partial fulfillment was claimed.
-3. **Delivery date inconsistencies:** Some responses (e.g., Requests 5 and 6) included delivery dates in 2023, which do not match the 2025 scenario, suggesting a logic or prompt grounding issue.
-4. **Non-catalog pricing and vague explanations:** Some quotations referenced "market prices" or "special rates" without clear catalog justification, which could confuse customers.
-5. **Occasional internal or unnecessary details:** Some responses included transaction IDs or terms and conditions that may not be needed in customer-facing communication.
+1. **Frequent stock-outs:** Most requests resulted in full or partial stock-outs, with many orders unable to be fulfilled (e.g., Requests 1, 2, 5, 6, 7, 9, 15, 17, 19). This limits the demonstration of successful end-to-end fulfillment.
+2. **Inconsistent pricing and explanations:** Some quotations referenced "market prices," "special rates," or gave different unit prices for similar items across requests, which could confuse customers (e.g., Requests 3, 4, 8, 12, 13, 14, 16, 18, 20).
+3. **Occasional internal or unnecessary details:** Some responses included internal notes, placeholders, or company sign-offs that may not be needed in customer-facing communication (e.g., Requests 7, 8, 19).
+4. **Delivery date inconsistencies:** While many responses included delivery dates, some were generic or not clearly tied to actual inventory or supplier logic.
+5. **No explicit inventory replenishment:** There is no evidence of proactive inventory restocking or suggestions for alternative products in the face of repeated stock-outs.
 
 ## Suggestions for Improvements
 
